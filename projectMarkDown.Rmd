@@ -1,0 +1,124 @@
+---
+title: 'Project for Practical Machine Learning'
+author: 'pd'
+date: 'Wednesday, May 20, 2015'
+output: html_document
+---
+
+## Synopsis
+This course project for Practical Machine learning analyzes data from 'Weight Lifting Exercises Dataset' as described at http://groupware.les.inf.puc-rio.br/har and in the publication:
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human 13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+Using data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants who performed bicep curls correctly and incorrectly in 5 different ways, the goal of the project was to predict from an observation of data from all the sensors in a single window of time, which correct or incorrect execution the dumdbell curl was being performed.
+
+The data were downloaded into the working directory: 
+download.file('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv', 'D:/PeterD/Home Docs/Courses/Practical Machine Learning')
+download.file('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv')
+
+I chose predictors based on a comment in the Discussion Forum 'Project Data Set' made by Edward Drake that helped to characterize the data. This comment is paraphrased as follows. The raw data was obtained from 4 sensors on the belt, glove, arm and dumbbell collected during the dumbbell curls. Each sensor captured 9 pieces of data (x,y and z component of gyros, accel and magnet), from which were calculated the roll, pitch, yaw, and total acceleration. These data total to 52 variables (4 * (9 + 4) = 52). Additional variables in the data set are statistics on these variables (e.g., kurtosis, skewness, max, min, amplitude, variance, etc.). These summary statistic variables consisted of ~97% NAs. I excluded these from the prediction model because comments on the Discussion Forum said good prediction accuracty could be obtained without them. But first I tried imputting the missing values in these variables and using all of the variables in a random forests model that ran for 16 hrs before I aborted it and went to read the Discussion Forum. Many thanks to Edward Drake and others for their comments in the forum.
+
+The training set I used was 75% of the 'pml-training.csv' data. I used the remaining 25% as a validation set. The model I chose was Generalized Boosted Regression Models (Package 'gbm'). It produced a model with an in-sample and out-of-sample accuracy of about 0.96 that correctly predicted the test cases. 
+
+## Load Libraries and Data
+```{r warning=FALSE, message=FALSE, error=FALSE}
+library(AppliedPredictiveModeling); library(caret);library(ggplot2);library(grid);library(reshape);library(Rmisc);library(DMwR);library(gridExtra);library(gbm)
+```
+
+```{r}
+dat <- read.csv('pml-training.csv', stringsAsFactors = FALSE, na.strings=c('', ' ', 'NA'))
+testdat <- read.csv('pml-testing.csv', stringsAsFactors = FALSE, na.strings=c('', ' ', 'NA'))
+```
+
+## Clean Data (reduce features)
+### Remove variables that are ~97% NAs
+```{r}
+# Script from Discussion Formum which cites (http://stackoverflow.com/a/23597202)
+z <- colSums(is.na(dat)) # show columns with mostly NA (i.e., statistics)
+z0 <- z==0               # make logical vector of columns with zero NAs 
+dat60 <- dat[,z0]        # selects all columns with zero NA
+dat53 <- dat60[c(-1:-7)] # removes not needed columns and outcome column
+```
+
+### Divide Data Set 'pml-training.csv' into Training and Cross-validation Sets 
+```{r}
+set.seed(123)
+inTrain <- createDataPartition(y=dat53$classe, p=.75, list=FALSE)
+training <- dat53[inTrain,]
+testing <- dat53[-inTrain,]
+```
+
+# Exploratory Table and Plot
+```{r warning=FALSE, fig.width=12, fig.height=12}
+# melt dat
+mtraining <- melt(training,  id = 'classe', variable_name = 'measure')
+
+sumry <- summarySE(mtraining, measurevar='value', groupvars=c('measure'), na.rm=TRUE)
+print(sumry[,c(-5,-6)])
+
+# plot density plots for all columns
+p <- ggplot(data = na.omit(mtraining), aes(x=value)) + geom_density(aes(fill=classe), alpha = 0.4) + xlim(c(-2.5,2.5)) + ylim(c(0,2))
+p <- p + facet_wrap( ~ measure)
+
+```
+### Density Plots. Note the first three plots correspond to the most important variables identified by the model (below).
+
+```{r warning=FALSE, fig.width=12, fig.height=12}
+p + scale_fill_brewer(palette = 'Set1')
+```
+
+
+# Create and Validate Model
+### Train the model
+```{r}
+set.seed(123)
+# gbm1 <- train(as.factor(classe) ~., data=training, method='gbm', verbose=F) # training
+# saveRDS(gbm1, 'gbm1.rds') 
+gbm1 <- readRDS('gbm1.rds') # not running above lines to save time
+print(gbm1)
+
+```
+##### Note the in-sample accuracy: 0.9595347
+
+```{r}
+gbmImp <- varImp(gbm1, scale = FALSE)
+gbmImp
+```
+
+### Validate the model
+```{r}
+set.seed(123)
+testingpredictions <- predict(gbm1, testing) # predicting the validation set
+equalPredictions <- (testingpredictions==testing$classe) # percent correct predictions 
+AccuracyOfPrediction<-1-(sum(equalPredictions==F)/sum(equalPredictions==T))
+```
+The out-of-sample error of prediction for the cross-validation set is `r 1-AccuracyOfPrediction`, which is slightly smaller than the in-sample error, although it is typically expected to be larger than the in-sample error. 
+
+### Confusion Matrix
+```{r}
+ConfusionMatrix <- confusionMatrix(testingpredictions, testing$classe)
+ConfusionMatrix
+```
+
+
+# Predict the 20 Test Cases in the Testing Data Set 
+```{r}
+answers <- predict(gbm1, testdat) # predicting the test set 'pml-testing.csv'
+```
+#### *The predicted classes of the test set are:* `r answers`
+
+### Function creates text file with a single letter (A, B, C, D, or E) indicating the predicted classe of each test case (from the instructions). 
+```{r}
+pml_write_files = function(x){
+                n = length(x)
+                for(i in 1:n){
+                        filename = paste0('problem_id_',i,'.txt')
+                        write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+                }
+        }
+```
+
+### Write the files to the working directory.
+```{r eval=FALSE}
+pml_write_files(answers)
+```
+
